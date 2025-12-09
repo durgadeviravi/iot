@@ -1,0 +1,40 @@
+import json
+import time
+import requests
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+# device key (in production store in secure element)
+priv_hex = '0x...DEVICE_PRIVATE_KEY_HEX...'
+acct = Account.from_key(priv_hex)
+
+GATEWAY_URL = 'http://127.0.0.1:5000/ingest'  # gateway endpoint
+
+def create_payload(device_id, sensor_values):
+    payload = {
+        'device_id': device_id,
+        'timestamp': int(time.time()),
+        'sensor_values': sensor_values
+    }
+    return payload
+
+def sign_payload(payload):
+    msg_text = json.dumps(payload, sort_keys=True)
+    message = encode_defunct(text=msg_text)
+    signed = Account.sign_message(message, private_key=priv_hex)
+    return signed.signature.hex(), msg_text
+
+if __name__ == '__main__':
+    device_id = 'device-001'
+    sensor_values = {'temp_c': 72.5, 'vibration': 0.012}
+    payload = create_payload(device_id, sensor_values)
+    sig_hex, canonical = sign_payload(payload)
+
+    packet = {
+        'payload': payload,
+        'signature': sig_hex,
+        'pub_address': acct.address
+    }
+
+    r = requests.post(GATEWAY_URL, json=packet)
+    print('gateway response', r.status_code, r.text)

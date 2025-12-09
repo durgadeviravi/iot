@@ -1,0 +1,79 @@
+from flask import Flask, request, jsonify
+import json, os, hashlib, time
+from eth_account.messages import encode_defunct
+from eth_account import Account
+from web3 import Web3
+
+app = Flask(__name__)
+
+# RPC to local ganache
+WEB3_RPC = 'http://127.0.0.1:8545'
+web3 = Web3(Web3.HTTPProvider(WEB3_RPC))
+
+# gateway signing account (must be unlocked or used via private key)
+GATEWAY_PRIV = '0x...GATEWAY_PRIVATE_KEY...'
+gateway_acct = Account.from_key(GATEWAY_PRIV)
+
+# contract info: address + ABI
+CONTRACT_ADDRESS = '0x...DEPLOYED_CONTRACT_ADDRESS...'
+CONTRACT_ABI = [ /* paste ABI here after compilation */ ]
+contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+OFFCHAIN_STORE = './offchain_store'
+os.makedirs(OFFCHAIN_STORE, exist_ok=True)
+
+def sha256_hex(data_bytes):
+    return hashlib.sha256(data_bytes).hexdigest()
+
+@app.route('/ingest', methods=['POST'])
+def ingest():
+    body = request.get_json()
+    payload = body.get('payload')
+    signature = body.get('signature')
+    pub_address = body.get('pub_address')
+
+    if not payload or not signature or not pub_address:
+        return jsonify({'error': 'missing fields'}), 400
+
+    canonical = json.dumps(payload, sort_keys=True)
+    message = encode_defunct(text=canonical)
+
+    try:
+        signer = Account.recover_message(message, signature=signature)
+    except Exception as e:
+        return jsonify({'error': 'signature recover failed', 'e': str(e)}), 400
+
+    if signer.lower() != pub_address.lower():
+        return jsonify({'error': 'signature mismatch'}), 403
+
+    # store payload off-chain (as file named by timestamp)
+    filename = f"{payload['device_id']}_{payload['timestamp']}.json"
+    path = os.path.join(OFFCHAIN_STORE, filename)
+    with open(path, 'w') as f:
+        f.write(canonical)
+
+    with open(path, 'rb') as f:
+        data_bytes = f.read()
+
+    data_hash = sha256_hex(data_bytes)  # hex string
+
+    # call contract addAnchor (dataHash as bytes32) - convert hex->bytes32
+    data_hash_bytes32 = web3.toBytes(hexstr=data_hash)
+
+    # build transaction
+    nonce = web3.eth.get_transaction_count(gateway_acct.address)
+    txn = contract.functions.addAnchor(data_hash_bytes32, payload['device_id']).build_transaction({
+        'chainId': web3.eth.chain_id,
+        'gas': 300_000,
+        'gasPrice': web3.to_wei('1', 'gwei'),
+        'nonce': nonce,
+    })
+
+    signed_tx = Account.sign_transaction(txn, private_key=GATEWAY_PRIV)
+    tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+
+    return jsonify({'status': 'anchored', 'tx': tx_hash.hex(), 'data_hash': data_hash})
+
+if __name__ == '__main__':
+    app.run(port=5000)

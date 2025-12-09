@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract IIoTAnchor {
+    address public owner;
+    mapping(address => bool) public writers;
+
+    struct Anchor {
+        address writer;
+        bytes32 dataHash; // hash of payload
+        uint256 timestamp;
+        string deviceId;
+    }
+
+    Anchor[] public anchors;
+
+    event AnchorAdded(uint256 index, address indexed writer, string deviceId, bytes32 dataHash, uint256 timestamp);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "only owner");
+        _;
+    }
+
+    modifier onlyWriter() {
+        require(writers[msg.sender], "not authorized writer");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    function setWriter(address w, bool allowed) external onlyOwner {
+        writers[w] = allowed;
+    }
+
+    function addAnchor(bytes32 dataHash, string calldata deviceId) external onlyWriter returns (uint256) {
+        anchors.push(Anchor({writer: msg.sender, dataHash: dataHash, timestamp: block.timestamp, deviceId: deviceId}));
+        uint256 idx = anchors.length - 1;
+        emit AnchorAdded(idx, msg.sender, deviceId, dataHash, block.timestamp);
+        return idx;
+    }
+
+    function getAnchor(uint256 idx) external view returns (address, bytes32, uint256, string memory) {
+        Anchor storage a = anchors[idx];
+        return (a.writer, a.dataHash, a.timestamp, a.deviceId);
+    }
+
+    function anchorsCount() external view returns (uint256) {
+        return anchors.length;
+    }
+}

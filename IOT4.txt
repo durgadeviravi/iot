@@ -1,0 +1,26 @@
+import json, hashlib
+from web3 import Web3
+
+WEB3_RPC = 'http://127.0.0.1:8545'
+web3 = Web3(Web3.HTTPProvider(WEB3_RPC))
+CONTRACT_ADDRESS = '0x...'
+CONTRACT_ABI = [ /* ABI */ ]
+contract = web3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+def sha256_hex(data_bytes):
+    import hashlib
+    return hashlib.sha256(data_bytes).hexdigest()
+
+# get last anchor
+count = contract.functions.anchorsCount().call()
+idx = count - 1
+writer, dataHash, ts, deviceId = contract.functions.getAnchor(idx).call()
+print('anchor', idx, writer, dataHash.hex(), ts, deviceId)
+
+with open('./offchain_store/{}_{}.json'.format(deviceId, ts), 'rb') as f:
+    data = f.read()
+
+if sha256_hex(data) == dataHash.hex():
+    print('payload matches on-chain anchor — integrity verified')
+else:
+    print('mismatch — possible tampering')
